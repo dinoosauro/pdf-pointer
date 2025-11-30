@@ -123,7 +123,10 @@ let references = new Map<string, string>([
     ["Install as a web app", "webAppInstall"],
     ["Install PDFPointer as an app for offline use and better integration with the OS.", "webAppInstallDesc"],
     ["You can also drop files here.", "dropFilesHere"],
-    ["Moreover, you can also open the files from the native file picker (Open With -> PDFPointer)", "openNativePicker"]
+    ["Moreover, you can also open the files from the native file picker (Open With -> PDFPointer)", "openNativePicker"],
+    ["Write the URL you want to open. Note that most website will decline the fetch request done by pdf-pointer, so it might be a good idea to download them in case this doesn't work.", "urlPicker"],
+    ["The website didn't permit pdf-pointer to fetch the PDF/Image", "failedUrlFetch"],
+    ["Open from an URL", "openUrl"]
 ])
 let dictionaries = {
     it: new Map<string, string>([
@@ -246,7 +249,10 @@ let dictionaries = {
         ["webAppInstall", "Installa come applicazione web"],
         ["webAppInstallDesc", "Installa PDFPointer come applicazione per l'utilizzo offline ed una integrazione migliore col sistema operativo."],
         ["dropFilesHere", "Puoi anche rilasciare i file qui."],
-        ["openNativePicker", "Inoltre, puoi anche aprire i file dal file picker nativo (Apri con -> PDFPointer)"]
+        ["openNativePicker", "Inoltre, puoi anche aprire i file dal file picker nativo (Apri con -> PDFPointer)"],
+        ["urlPicker", "Scrivi l'URL che vuoi aprire. Nota che molti dei siti rifiuteranno la richiesta fatta da pdf-pointer, pertanto può essere una buona idea scaricarli nel caso questa funzionalità non dovesse funzionare."],
+        ["failedUrlFetch", "Il sito non ha permesso a pdf-pointer di ottenere il PDF o l'immagine."],
+        ["openUrl", "Apri da un URL"]
     ])
 }
 /**

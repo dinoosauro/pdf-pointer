@@ -12,7 +12,10 @@ import ThemeManager from "./Scripts/ThemeManager";
 import Lang from "./Scripts/LanguageTranslations";
 import BackgroundManager from "./Scripts/BackgroundManager";
 import AlertManager from "./Scripts/AlertManager";
-PDFJS.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+PDFJS.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.mjs",
+  import.meta.url
+).toString();
 interface State {
   PDFObj?: PDFDocumentProxy,
   imgObj?: HTMLImageElement
@@ -89,6 +92,7 @@ export default function App() {
             <DynamicImg id="laptop" width={200}></DynamicImg><br></br>
           </div>
           <i>{`${Lang("Don't worry. Everything will stay on your device.")} ${Lang("You can also drop files here.")} ${window.matchMedia('(display-mode: standalone)').matches ? Lang("Moreover, you can also open the files from the native file picker (Open With -> PDFPointer)") : ""}`}</i><br></br><br></br>
+          <div className="flex hcenter" style={{gap: "10px"}}>
           <button onClick={() => { // Get the PDF file
             let input = document.createElement("input");
             input.type = "file";
@@ -98,6 +102,34 @@ export default function App() {
             }
             input.click();
           }}>{Lang("Choose file")}</button>
+          <button onClick={async () => {
+            const url = prompt(Lang("Write the URL you want to open. Note that most website will decline the fetch request done by pdf-pointer, so it might be a good idea to download them in case this doesn't work."));
+            if (url) {
+              function createImgElement(buffer: ArrayBuffer | string) {
+                const img = document.createElement("img");
+                img.onload = () => {
+                  UpdateState(prev => {return {...prev, imgObj: img}});
+                }
+                img.onerror = () => {
+                  alert(Lang("The website didn't permit pdf-pointer to fetch the PDF/Image"))
+                }
+                img.crossOrigin = "anonymous";
+                img.src = typeof buffer === "string" ? buffer : URL.createObjectURL(new Blob([buffer]));
+              }
+              try {
+                const req = await fetch(url);
+                const res = await req.arrayBuffer();
+                if (req.headers.get("Content-Type") === "application/pdf") {
+                  let doc = PDFJS.getDocument(res);
+                  let pdfObj = await doc.promise;
+                  UpdateState(prev => {return {...prev, PDFObj: pdfObj}}); 
+                } else createImgElement(res);
+              } catch (ex) {
+                createImgElement(url);
+              }
+            }
+          }}>{Lang("Open from an URL")}</button>
+          </div>
         </Card>
         {!CurrentState.hideTab && !window.matchMedia('(display-mode: standalone)').matches && <Card>
           <h2>{Lang("Install as a web app")}</h2>

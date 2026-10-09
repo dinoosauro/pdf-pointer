@@ -26,7 +26,6 @@ export default function Thumbnail({ PDFObj, PDFState }: Props) {
         nextSuggested: true // If it's time to render more pages (–> if the user has scrolled a lot of the div)
     });
     let canvasContainer = useRef<CanvasContainer[]>([]);
-    console.log(PDFState);
     useEffect(() => {
         if (!pages.nextSuggested) return; // Nothing more to render
         (async () => {
@@ -53,6 +52,7 @@ export default function Thumbnail({ PDFObj, PDFState }: Props) {
                 let ctx = canvas.getContext("2d");
                 if (ctx !== null) {
                     let render = page.render({
+                        canvas,
                         canvasContext: ctx,
                         viewport: viewport,
                         transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined
@@ -61,12 +61,13 @@ export default function Thumbnail({ PDFObj, PDFState }: Props) {
                     // @ts-ignore
                     canvasContainer.current.find(e => e.page === i).dom = canvas; // Update the value of the canvasContainer with the linked canvas;
                     updatePages({ current: i + 1, nextSuggested: false }); // Remember the next page to render
+                    page.cleanup();
                 }
             }
         })()
     }, [pages.nextSuggested])
     useEffect(() => {
-        window.addEventListener("resize", () => { // When resizing the window, also these canvas must be resized. The width is always 25vw, while the height is calculated with a proportion.
+        function resizeEvent() { // When resizing the window, also these canvas must be resized. The width is always 25vw, while the height is calculated with a proportion.
             for (let item of canvasContainer.current) {
                 if (item.dom && item.viewport) {
                     item.dom.style.width = `${document.documentElement.offsetWidth * 25 / 100}px`;
@@ -74,14 +75,25 @@ export default function Thumbnail({ PDFObj, PDFState }: Props) {
 
                 }
             }
-        })
+        }
+        window.addEventListener("resize", resizeEvent);
+        return () => {
+            window.removeEventListener("resize", resizeEvent);
+            for (const container of canvasContainer.current) {
+                if (container.dom) {
+                    container.dom?.getContext("2d")?.clearRect(0, 0, container.dom.width, container.dom.height);
+                    container.dom.width = 0;
+                    container.dom.height = 0;
+                }
+            } 
+        }
     }, [])
     return <div className="thumbnailContainer normalLeftAnimation" onScroll={(e) => {
         let container = e.target as HTMLDivElement;
         let percentage = Math.round((container.scrollTop / (container.scrollHeight - container.offsetHeight)) * 100); // Get the percentage of scroll
         if (percentage > 80) updatePages(prevState => { return { ...prevState, nextSuggested: true } })
     }}>
-        <div onMouseOver={() => console.log("A")} style={{ position: "sticky", top: "15px", left: "25px", padding: "10px", backgroundColor: "var(--firststruct)", borderRadius: "8px", width: "24px", height: "24px" }} className="simplePointer" onClick={() => {
+        <div style={{ position: "sticky", top: "15px", left: "25px", padding: "10px", backgroundColor: "var(--firststruct)", borderRadius: "8px", width: "24px", height: "24px" }} className="simplePointer" onClick={() => {
             RerenderButtons.update("thumbnail", false);
             PDFState(prevState => { return { ...prevState, showThumbnail: 2 } })
         }}>

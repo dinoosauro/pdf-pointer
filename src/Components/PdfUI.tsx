@@ -56,6 +56,10 @@ export default function PDF({ pdfObj, imgObj }: Props) {
     */
     let isCanvasWorking = useRef<boolean>(false);
     /**
+     * Promise resolved when the PDF page has been successfully rendered.
+     */
+    let pageLoad = useRef<Promise<void>>(Promise.resolve());
+    /**
     * The initial zIndex for the canvas
     */
     let zIndex = useRef<number>(2);
@@ -112,78 +116,107 @@ export default function PDF({ pdfObj, imgObj }: Props) {
     }
 
     useEffect(() => {
-        if (isCanvasWorking.current || currentPdfShow.current === `${pageSettings.page}-${pageSettings.scale}-${pageSettings.isFullscreenChange}`) return;
-        // Create a spinner for loading info
-        const div = document.createElement("div");
-        createRoot(div).render(<div className="spinner" style={{ width: window.innerWidth > window.innerHeight ? "30vh" : "30vw", height: window.innerWidth > window.innerHeight ? "30vh" : "30vw" }}></div>)
-        div.classList.add("simpleFixed", "simpleCenter", "noEvents");
-        document.body.append(div);
-        (async () => {
-            /**
-             * Scale all the drawing canvases so that they have the same width/height of the PDF/Image canvas
-             * @param width the new width of the canvas
-             */
-            function adaptDrawCanvas(width: number) {
-                if (!canvasRef.current.centerDiv) return;
-                for (let annotation of Annotations.get({ page: 1, returnEverything: true })) annotation[0].style.display = annotation[1] === pageSettings.page ? "block" : "none"; // Show only the annotations of the page. Note that the "page" key will be ignored, and any value would be okay.
-                for (let dom of document.querySelectorAll(".hoverCanvas")) { // Fix multiple canvas on top of another
-                    let newCanvas = dom as SVGSVGElement;
-                    newCanvas.style.transformOrigin = "top-left";
-                    if (dom.getAttribute("data-noresize") === null) newCanvas.style.transform = `scale(${Math.floor(width) / parseInt(newCanvas.getAttribute("width") ?? "1")})`;
-                    if (canvasRef.current.mainCanvas) newCanvas.style.left = canvasRef.current.centerDiv.style.justifyContent === "center" ? `${(canvasRef.current.centerDiv.getBoundingClientRect().width - canvasRef.current.mainCanvas.getBoundingClientRect().width) / 2}px` : "0px";
-                }
-            }
-            if (canvasRef.current && canvasRef.current.centerDiv && canvasRef.current.mainCanvas) {
+        if (currentPdfShow.current === `${pageSettings.page}-${pageSettings.scale}-${pageSettings.isFullscreenChange}`) return;
+        /**
+         * If the loading operation has been cancelled or not
+         */
+        let isLoadingCancelled = false;
+        /**
+         * The PDF.JS render promise
+         */
+        let renderTask: PDFJS.RenderTask | undefined;
+        /**
+         * The number of the previous page that was loaded
+         */
+        const previousPageLoaded = pageLoad.current;
+        pageLoad.current = (async () => {
+            await previousPageLoaded;
+            if (isLoadingCancelled) return;
+            isCanvasWorking.current = true;
+            // Create a spinner for loading info
+            const div = document.createElement("div");
+            const spinnerRoot = createRoot(div);
+            spinnerRoot.render(<div className="spinner" style={{ width: window.innerWidth > window.innerHeight ? "30vh" : "30vw", height: window.innerWidth > window.innerHeight ? "30vh" : "30vw" }}></div>)
+            div.classList.add("simpleFixed", "simpleCenter", "noEvents");
+            document.body.append(div);
+            let pdfPage: PDFJS.PDFPageProxy | undefined;
+            try {
                 /**
-                 * Change the canvas width/height, by keeping in mind high-density displays. If possible, content is also centered
-                 * @param width the desired width
-                 * @param height the desired height
+                 * Scale all the drawing canvases so that they have the same width/height of the PDF/Image canvas
+                 * @param width the new width of the canvas
                  */
-                function adaptCanvasSize(width: number, height: number) {
-                    if (!canvasRef.current.mainCanvas || !canvasRef.current.centerDiv) return;
-                    canvasRef.current.mainCanvas.width = Math.floor(width * outputScale);
-                    canvasRef.current.mainCanvas.height = Math.floor(height * outputScale);
-                    canvasRef.current.centerDiv.style.justifyContent = width > canvasRef.current.centerDiv.getBoundingClientRect().width ? "left" : "center"; // Make "justifyContent" left so that content isn't trimmed
-                    canvasRef.current.mainCanvas.style.width = Math.floor(width) + "px";
-                    canvasRef.current.mainCanvas.style.height = Math.floor(height) + "px";
-                }
-                const outputScale = window.devicePixelRatio || 1;
-                /**
-                 * Get the scale of the new item
-                 * @param height the standard height of the resource
-                 * @returns a number with the scale to apply
-                 */
-                const getScale = (height: number) => pageSettings.isFullscreenChange ? window.innerHeight / height * pageSettings.scale : pageSettings.scale;
-                if (!pdfObj) { // The provided content should be an image
-                    if (imgObj) { // Add a dobule check, so that, even if this wasn't the case for some strange reason, the script will return nothing.
-                        adaptCanvasSize(imgObj.width * getScale(imgObj.height), imgObj.height * getScale(imgObj.height));
-                        adaptDrawCanvas(imgObj.width * getScale(imgObj.height));
-                        const context = canvasRef.current.mainCanvas.getContext("2d");
-                        context && context.drawImage(imgObj, 0, 0, context.canvas.width, context.canvas.height);
+                function adaptDrawCanvas(width: number) {
+                    if (!canvasRef.current.centerDiv) return;
+                    for (let annotation of Annotations.get({ page: 1, returnEverything: true })) annotation[0].style.display = annotation[1] === pageSettings.page ? "block" : "none"; // Show only the annotations of the page. Note that the "page" key will be ignored, and any value would be okay.
+                    for (let dom of document.querySelectorAll(".hoverCanvas")) { // Fix multiple canvas on top of another
+                        let newCanvas = dom as SVGSVGElement;
+                        newCanvas.style.transformOrigin = "top-left";
+                        if (dom.getAttribute("data-noresize") === null) newCanvas.style.transform = `scale(${Math.floor(width) / parseInt(newCanvas.getAttribute("width") ?? "1")})`;
+                        if (canvasRef.current.mainCanvas) newCanvas.style.left = canvasRef.current.centerDiv.style.justifyContent === "center" ? `${(canvasRef.current.centerDiv.getBoundingClientRect().width - canvasRef.current.mainCanvas.getBoundingClientRect().width) / 2}px` : "0px";
                     }
-                    div.remove();
-                    return;
                 }
-                isCanvasWorking.current = true; // Avoid multiple PDF operations
-                // Render the PDF
-                const pdfPage = await pdfObj.getPage(pageSettings.page);
-                const viewport = pdfPage.getViewport({ scale: getScale(pdfPage.getViewport({ scale: 1 }).height) }); // If it's in fullscreen mode, the 100% zoom must fill the window height
-                adaptCanvasSize(viewport.width, viewport.height);
-                adaptDrawCanvas(viewport.width);
-                const context = canvasRef.current.mainCanvas.getContext("2d");
-                if (context !== null) {
-                    let render = pdfPage.render({
-                        canvasContext: context,
-                        viewport: viewport,
-                        transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined
-                    });
-                    await render.promise;
-                    currentPdfShow.current = `${pageSettings.page}-${pageSettings.scale}-${pageSettings.isFullscreenChange}`;
-                    isCanvasWorking.current = false;
+                if (canvasRef.current && canvasRef.current.centerDiv && canvasRef.current.mainCanvas) {
+                    /**
+                     * Change the canvas width/height, by keeping in mind high-density displays. If possible, content is also centered
+                     * @param width the desired width
+                     * @param height the desired height
+                     */
+                    function adaptCanvasSize(width: number, height: number) {
+                        if (!canvasRef.current.mainCanvas || !canvasRef.current.centerDiv) return;
+                        canvasRef.current.mainCanvas.width = Math.floor(width * outputScale);
+                        canvasRef.current.mainCanvas.height = Math.floor(height * outputScale);
+                        canvasRef.current.centerDiv.style.justifyContent = width > canvasRef.current.centerDiv.getBoundingClientRect().width ? "left" : "center"; // Make "justifyContent" left so that content isn't trimmed
+                        canvasRef.current.mainCanvas.style.width = Math.floor(width) + "px";
+                        canvasRef.current.mainCanvas.style.height = Math.floor(height) + "px";
+                    }
+                    const outputScale = window.devicePixelRatio || 1;
+                    /**
+                     * Get the scale of the new item
+                     * @param height the standard height of the resource
+                     * @returns a number with the scale to apply
+                     */
+                    const getScale = (height: number) => pageSettings.isFullscreenChange ? window.innerHeight / height * pageSettings.scale : pageSettings.scale;
+                    if (!pdfObj) { // The provided content should be an image
+                        if (imgObj) { // Add a dobule check, so that, even if this wasn't the case for some strange reason, the script will return nothing.
+                            canvasRef.current.mainCanvas.width = 0;
+                            canvasRef.current.mainCanvas.height = 0;
+                            adaptCanvasSize(imgObj.width * getScale(imgObj.height), imgObj.height * getScale(imgObj.height));
+                            adaptDrawCanvas(imgObj.width * getScale(imgObj.height));
+                            const context = canvasRef.current.mainCanvas.getContext("2d");
+                            context && context.drawImage(imgObj, 0, 0, context.canvas.width, context.canvas.height);
+                        }
+                        return;
+                    }
+                    canvasRef.current.mainCanvas.width = 0;
+                    canvasRef.current.mainCanvas.height = 0;
+                    // Render the PDF
+                    pdfPage = await pdfObj.getPage(pageSettings.page);
+                    if (isLoadingCancelled) return;
+                    const viewport = pdfPage.getViewport({ scale: getScale(pdfPage.getViewport({ scale: 1 }).height) }); // If it's in fullscreen mode, the 100% zoom must fill the window height
+                    adaptCanvasSize(viewport.width, viewport.height);
+                    adaptDrawCanvas(viewport.width);
+                    const context = canvasRef.current.mainCanvas.getContext("2d");
+                    context?.clearRect(0, 0, context.canvas.width, context.canvas.height);
+                    if (context !== null) {
+                        renderTask = pdfPage.render({
+                            canvas: canvasRef.current.mainCanvas,
+                            canvasContext: context,
+                            viewport: viewport,
+                            transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined
+                        });
+                        await renderTask.promise;
+                        if (!isLoadingCancelled) currentPdfShow.current = `${pageSettings.page}-${pageSettings.scale}-${pageSettings.isFullscreenChange}`;
+                    }
                 }
+            } catch (error) {
+                if (!isLoadingCancelled) console.error("Failed to load PDF page", error);
+            } finally {
+                pdfPage?.cleanup();
+                isCanvasWorking.current = false;
+                spinnerRoot.unmount();
+                div.remove();
             }
-            div.remove();
-        })()
+        })();
         let fixCircleCanvas = setInterval(() => { // It actually should be immediately cleared. However, adapt the other canvases by setting them to the same width and height as the model
             let canvas = document.querySelector("canvas:not(.hoverCanvas)");
             if (canvas && canvasRef.current.hoverCanvas) {
@@ -191,6 +224,11 @@ export default function PDF({ pdfObj, imgObj }: Props) {
                 clearInterval(fixCircleCanvas);
             }
         }, 25);
+        return () => {
+            isLoadingCancelled = true;
+            renderTask?.cancel();
+            clearInterval(fixCircleCanvas);
+        };
 
     }, [pageSettings.page, pageSettings.scale, pageSettings.isFullscreenChange]);
     useEffect(() => {
@@ -300,8 +338,8 @@ export default function PDF({ pdfObj, imgObj }: Props) {
             while (userBtnPressed.current.indexOf(e.key.toLowerCase()) !== -1) userBtnPressed.current.splice(userBtnPressed.current.indexOf(e.key.toLowerCase()), 1); // If the user keeps pressed a key for too long, multiple "onkeydown" events will be triggered. In this way, when the user releases the key, every instance of that key is deleted.
         }
         window.onkeydown = (e) => { // Add keyboard shortcuts
-            e.preventDefault();
             if (document.activeElement?.tagName.toLowerCase() === "textarea" || document.activeElement?.tagName.toLowerCase() === "input" || document.activeElement?.tagName.toLowerCase() === "select" || document.activeElement?.getAttribute("data-nokeyboard") === "a") return; // Avoid processing keyboard shortcuts if the user is writing something
+            e.preventDefault();
             const KeyPreference = JSON.parse(localStorage.getItem("PDFPointer-KeyboardPreferences") ?? "{}") as KeyPreference;
             userBtnPressed.current.push(e.key.toLowerCase());
             lookFunction: for (const tempAction in KeyPreference) {
@@ -421,10 +459,10 @@ export default function PDF({ pdfObj, imgObj }: Props) {
         }}></Toolbar>
         <br></br>
         <div style={{ overflow: "auto" }}>
-            <div className="center" ref={el => (canvasRef.current.centerDiv = el)} style={{ overflow: "auto hidden" }}>
-                <canvas key="PDFCanvas" ref={el => (canvasRef.current.mainCanvas = el)}></canvas>
-                <div className="cursor" data-noresize key={"PDFCanvasCircle"} ref={el => (canvasRef.current.circleCanvas = el)}></div>
-                <canvas style={{ zIndex: 999990, cursor: "none" }} key="PDFCanvasEvents" className="hoverCanvas" ref={el => (canvasRef.current.hoverCanvas = el)} data-noresize onMouseDown={(e) => onMouseDown()} onTouchStart={() => {
+            <div className="center" ref={el => { canvasRef.current.centerDiv = el }} style={{ overflow: "auto hidden" }}>
+                <canvas key="PDFCanvas" ref={el => { canvasRef.current.mainCanvas = el }}></canvas>
+                <div className="cursor" data-noresize key={"PDFCanvasCircle"} ref={el => { canvasRef.current.circleCanvas = el }}></div>
+                <canvas style={{ zIndex: 999990, cursor: "none" }} key="PDFCanvasEvents" className="hoverCanvas" ref={el => { canvasRef.current.hoverCanvas = el }} data-noresize onMouseDown={(e) => onMouseDown()} onTouchStart={() => {
                     // Disable (or enable) standard touch actions so that, when the user is using a pen/eraser, the canvas won't move
                     if (canvasRef.current.centerDiv?.parentElement) canvasRef.current.centerDiv.parentElement.style.touchAction = customModes.current.isPenEnabled || customModes.current.isEraserEnabled ? "none" : "";
                     if (canvasRef.current.centerDiv) canvasRef.current.centerDiv.style.touchAction = customModes.current.isPenEnabled || customModes.current.isEraserEnabled ? "none" : "";
@@ -457,7 +495,7 @@ export default function PDF({ pdfObj, imgObj }: Props) {
                     }}></canvas>
             </div>
         </div >
-        <div ref={el => (canvasRef.current.thumbnailDiv = el)}>
+        <div ref={el => { canvasRef.current.thumbnailDiv = el }}>
             {pageSettings.showThumbnail !== 0 && pdfObj && <Thumbnail key={`PDFPointer-ThumbnailViewer`} PDFObj={pdfObj} PDFState={updatePage}></Thumbnail>}
         </div>
     </>

@@ -27,7 +27,7 @@ declare global {
   }
 }
 export default function App() {
-  let installationPrompt = useRef<any>();
+  let installationPrompt = useRef<any>(null);
   let [CurrentState, UpdateState] = useState<State>({});
   let cardContainer = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -49,7 +49,7 @@ export default function App() {
   async function getNewState(file: File) {
     document.title = `${file.name} - PDFPointer`;
     if (file.type === "application/pdf") {
-      let doc = PDFJS.getDocument(await file.arrayBuffer());
+      let doc = PDFJS.getDocument({ data: await file.arrayBuffer() });
       let res = await doc.promise;
       UpdateState(prevState => { return { ...prevState, PDFObj: res } });
     } else {
@@ -120,7 +120,7 @@ export default function App() {
                 const req = await fetch(url);
                 const res = await req.arrayBuffer();
                 if (req.headers.get("Content-Type") === "application/pdf") {
-                  let doc = PDFJS.getDocument(res);
+                  let doc = PDFJS.getDocument({ data: res });
                   let pdfObj = await doc.promise;
                   UpdateState(prev => {return {...prev, PDFObj: pdfObj}}); 
                 } else createImgElement(res);

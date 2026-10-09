@@ -49,11 +49,16 @@ export default async function ImageExport({ imgType, pages, getAnnotations, pdfO
         const newCanvas = document.createElement("canvas");
         newCanvas.width = canvas.width;
         newCanvas.height = canvas.height;
-        let newCtx = newCanvas.getContext("2d");
-        if (newCtx) {
-            newCtx.filter = filter.trim();
-            newCtx.drawImage(canvas, 0, 0);
-            context.drawImage(newCanvas, 0, 0);
+        try {
+            let newCtx = newCanvas.getContext("2d");
+            if (newCtx) {
+                newCtx.filter = filter.trim();
+                newCtx.drawImage(canvas, 0, 0);
+                context.drawImage(newCanvas, 0, 0);
+            }
+        } finally {
+            newCanvas.width = 0;
+            newCanvas.height = 0;
         }
     }
     /**
@@ -62,7 +67,7 @@ export default async function ImageExport({ imgType, pages, getAnnotations, pdfO
      * @param context the context used for drawing the image
      * @param canvas the canvas used to get the width/height of the output image
      */
-    async function drawAnnotations({ number, context, canvas }: { number: number, context?: CanvasRenderingContext2D, canvas: HTMLCanvasElement }) {
+        async function drawAnnotations({ number, context, canvas }: { number: number, context?: CanvasRenderingContext2D, canvas: HTMLCanvasElement }) {
         for (const annotation of Annotations.get({ page: number })) await new Promise((resolve) => { // Draw annotations only of the current page
             const image = new Image(); // Create an Image object so that the SVG can be drawn into a Canvas
             image.onload = () => {
@@ -104,9 +109,10 @@ export default async function ImageExport({ imgType, pages, getAnnotations, pdfO
      * @returns a new Promise, resolved when the item has been downloaded
      */
     function exportCanvas(canvas: HTMLCanvasElement, number: number) {
-        return new Promise(async (resolve) => { // Create a new Blob for the canvas
+        return new Promise<void>((resolve, reject) => { // Create a new Blob for the canvas
             canvas.toBlob(async (blob) => {
-                if (blob) {
+                try {
+                    if (!blob) throw new Error("Failed to encode the exported canvas");
                     const name = `PdfPointer-${document.title.substring(0, document.title.lastIndexOf(" - "))}-Img-${number}.${imgType === "jpeg" ? "jpg" : imgType}`; // The document title follow the syntax "{PDF Name} - PDFPointer"
                     if (useZip) { // Add the file to the zip
                         await zip.file(name, blob);
@@ -122,23 +128,38 @@ export default async function ImageExport({ imgType, pages, getAnnotations, pdfO
                         a.click();
                         URL.revokeObjectURL(a.href);
                     }
-                    resolve("");
-
+                    resolve();
+                } catch (error) {
+                    reject(error);
                 }
             }, `image/${imgType}`, quality);
         })
     }
+    /**
+     * Clean a canvas by removing its content and changing its width and height
+     * @param canvas the canvas to cleanup
+     */
+    function releaseCanvas(canvas: HTMLCanvasElement) {
+        const ctx = canvas.getContext("2d");
+        ctx?.clearRect(0, 0, canvas.width, canvas.height);
+        canvas.width = 0;
+        canvas.height = 0;
+    }
     if (!pdfObj) {
         if (imgObj) {
             const canvas = document.createElement("canvas");
-            canvas.width = Math.floor(imgObj.width * scale);
-            canvas.height = Math.floor(imgObj.height * scale);
-            const context = canvas.getContext("2d");
-            if (context) {
-                context.drawImage(imgObj, 0, 0, canvas.width, canvas.height);
-                filter !== "" && drawFilter(canvas, context)
-                getAnnotations && await drawAnnotations({ number: 1, context: context, canvas: canvas });
-                await exportCanvas(canvas, 1);
+            try {
+                canvas.width = Math.floor(imgObj.width * scale);
+                canvas.height = Math.floor(imgObj.height * scale);
+                const context = canvas.getContext("2d");
+                if (context) {
+                    context.drawImage(imgObj, 0, 0, canvas.width, canvas.height);
+                    filter !== "" && drawFilter(canvas, context)
+                    getAnnotations && await drawAnnotations({ number: 1, context: context, canvas: canvas });
+                    await exportCanvas(canvas, 1);
+                }
+            } finally {
+                releaseCanvas(canvas);
             }
         }
     } else {
@@ -147,22 +168,28 @@ export default async function ImageExport({ imgType, pages, getAnnotations, pdfO
             createAlert.alert({ id: "ExportImageCreation", text: `${Lang("Exporting page")} ${number}...`, showSpinner: true, avoidTransition: true }) // Create an alert for warning the user of the current exportation
             // Render the canvas
             const pdfPage = await pdfObj.getPage(number);
-            const outputScale = window.devicePixelRatio || 1;
-            const viewport = pdfPage.getViewport({ scale: scale });
             const canvas = document.createElement("canvas");
-            canvas.width = Math.floor(viewport.width * outputScale);
-            canvas.height = Math.floor(viewport.height * outputScale);
-            let context = canvas.getContext("2d");
-            if (context !== null) {
-                let render = pdfPage.render({
-                    canvasContext: context,
-                    viewport: viewport,
-                    transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined
-                });
-                await render.promise;
-                filter !== "" && drawFilter(canvas, context)  // If filters are provided, create a temp canvas where the result will be cloned, the filter will be applied and then the image will be drawn in the first canvas
-                getAnnotations && await drawAnnotations({ number: number, context: context, canvas: canvas })
-                await exportCanvas(canvas, number);
+            try {
+                const outputScale = window.devicePixelRatio || 1;
+                const viewport = pdfPage.getViewport({ scale: scale });
+                canvas.width = Math.floor(viewport.width * outputScale);
+                canvas.height = Math.floor(viewport.height * outputScale);
+                let context = canvas.getContext("2d");
+                if (context !== null) {
+                    let render = pdfPage.render({
+                        canvas,
+                        canvasContext: context,
+                        viewport: viewport,
+                        transform: outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined
+                    });
+                    await render.promise;
+                    filter !== "" && drawFilter(canvas, context)  // If filters are provided, create a temp canvas where the result will be cloned, the filter will be applied and then the image will be drawn in the first canvas
+                    getAnnotations && await drawAnnotations({ number: number, context: context, canvas: canvas })
+                    await exportCanvas(canvas, number);
+                }
+            } finally {
+                releaseCanvas(canvas);
+                pdfPage.cleanup();
             }
         }
     }
